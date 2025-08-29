@@ -17,10 +17,13 @@ load_noise_std = 0.20 # 20% noise
 # LOAD DATA
 # -----------------------------
 pv_df = pd.read_csv(pv_file, parse_dates=["DateTime"])
-load_df = pd.read_csv(load_file, parse_dates=["Date"])
+pv_df["P"] = pd.to_numeric(pv_df["P"], errors="coerce")
+pv_df = pv_df.dropna(subset=["P"])
 
-pv_df = pv_df.sort_values("Date").reset_index(drop=True)
-load_df = load_df.sort_values("DateTime").reset_index(drop=True)
+load_df = pd.read_csv(load_file, parse_dates=["DATE"])
+
+pv_df = pv_df.sort_values("DateTime").reset_index(drop=True)
+load_df = load_df.sort_values("DATE").reset_index(drop=True)
 
 # -----------------------------
 # CREATE NOISY FORECAST
@@ -32,6 +35,12 @@ pv_df["pv_forecast_kwh"] = np.maximum(
 load_df["load_forecast_kwh"] = np.maximum(
     load_df["consumption_kWh"] + np.random.normal(0, load_noise_std * load_df["consumption_kWh"]), 0
 )
+
+# -----------------------------
+# KEEP ONLY RELEVANT FIELDS
+# -----------------------------
+pv_df = pv_df[["DateTime", "pv_forecast_kwh"]]
+load_df = load_df[["DATE", "load_forecast_kwh"]]
 
 # -----------------------------
 # SAVE OUTPUT
