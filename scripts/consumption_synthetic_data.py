@@ -4,18 +4,21 @@ import os
 import holidays
 
 # --- Paths ---
-input_path = r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\consumption\raw\2015_2023_hourly.csv"
+input_path = r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\consumption\raw\2015-2023_hourly.csv"
 output_path = r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\consumption\processed\synthetic_consumption.csv"
 
 # --- Load weather data ---
 df = pd.read_csv(input_path)
 
+# Strip column names to avoid whitespace issues
+df.columns = df.columns.str.strip()
+
 # Ensure timestamp column exists
-df["DATE"] = pd.to_datetime(df["DATE"])
+df["DATE"] = pd.to_datetime(df["Date"])
 df = df.sort_values("DATE")
 
 # Extract useful fields
-df["temperature_C"] = df["TMP"].str.split(",").str[0].astype(float) / 10.0  # TMP is tenths of °C
+df["temperature_C"] = df["TMP"].astype(float)  # already in °C
 df["hour"] = df["DATE"].dt.hour
 df["day_of_week"] = df["DATE"].dt.dayofweek
 df["month"] = df["DATE"].dt.month
@@ -24,27 +27,24 @@ df["month"] = df["DATE"].dt.month
 df["is_weekend"] = df["day_of_week"].isin([5, 6])
 
 # Mark holidays (France)
-fr_holidays = holidays.France(years=range(df["DATE"].dt.year.min(), df["DATE"].dt.year.max() + 1))
+years = range(df["DATE"].dt.year.min(), df["DATE"].dt.year.max() + 1)
+fr_holidays = holidays.France(years=years)
 df["is_holiday"] = df["DATE"].dt.date.isin(fr_holidays)
 
-# --- Baseline hourly profile (kWh per hour, normalized to ~20 kWh/day) ---
+# --- Baseline hourly profile (kWh per hour, normalized to ~14 kWh/day) ---
 base_profile = {
-    0: 0.4, 1: 0.3, 2: 0.3, 3: 0.3, 4: 0.4,
-    5: 0.6, 6: 1.2, 7: 1.6, 8: 1.0, 9: 0.7,
-    10: 0.6, 11: 0.6, 12: 1.2, 13: 0.8, 14: 0.7,
-    15: 0.8, 16: 1.0, 17: 1.8, 18: 2.0, 19: 2.2,
-    20: 1.8, 21: 1.4, 22: 0.9, 23: 0.6
+    0: 0.2, 1: 0.15, 2: 0.15, 3: 0.15, 4: 0.2, 5: 0.3, 6: 0.7, 7: 0.9,
+    8: 0.6, 9: 0.4, 10: 0.35, 11: 0.35, 12: 0.7, 13: 0.5, 14: 0.4, 15: 0.45,
+    16: 0.6, 17: 1.0, 18: 1.2, 19: 1.3, 20: 1.0, 21: 0.8, 22: 0.5, 23: 0.3
 }
 df["base_load"] = df["hour"].map(base_profile)
 
 # --- Modifiers ---
-# Heating demand (below 12°C)
-df["heating_factor"] = np.where(df["temperature_C"] < 12,
-                                (12 - df["temperature_C"]) * 0.1, 0)
+# Heating demand (below 12°C) - reduced for efficiency
+df["heating_factor"] = np.where(df["temperature_C"] < 12, (12 - df["temperature_C"]) * 0.05, 0)
 
-# Cooling demand (above 24°C)
-df["cooling_factor"] = np.where(df["temperature_C"] > 24,
-                                (df["temperature_C"] - 24) * 0.05, 0)
+# Cooling demand (above 24°C) - reduced for efficiency
+df["cooling_factor"] = np.where(df["temperature_C"] > 24, (df["temperature_C"] - 24) * 0.02, 0)
 
 # Weekend boost
 df["weekend_factor"] = np.where(df["is_weekend"], 1.1, 1.0)
@@ -58,18 +58,14 @@ df["noise"] = np.random.normal(1.0, 0.05, len(df))
 
 # --- Final consumption model ---
 df["consumption_kWh"] = (
-    df["base_load"] *
-    df["weekend_factor"] *
-    df["holiday_factor"] *
-    df["noise"]
-    + df["heating_factor"]
-    + df["cooling_factor"]
+    df["base_load"] * df["weekend_factor"] * df["holiday_factor"] * df["noise"]
+    + df["heating_factor"] + df["cooling_factor"]
 )
 
 # --- Keep useful columns ---
 result = df[[
-    "DATE", "consumption_kWh", "temperature_C",
-    "hour", "day_of_week", "is_weekend", "is_holiday"
+    "DATE", "consumption_kWh", "temperature_C", "hour",
+    "day_of_week", "is_weekend", "is_holiday"
 ]]
 
 # --- Save output ---
