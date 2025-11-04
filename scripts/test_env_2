@@ -1,0 +1,99 @@
+import pandas as pd
+from pathlib import Path
+import matplotlib.pyplot as plt
+from gym_env import SolarBatteryEnv
+import numpy as np
+
+# --- Load dataset ---
+path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\main\processed\train.csv")
+data = pd.read_csv(path)
+
+# --- Take a consecutive sample (500 timesteps starting at index 1000) ---
+start_idx = 1000
+end_idx = start_idx + 500
+data_sample = data.iloc[start_idx:end_idx].reset_index(drop=True)
+
+# --- Instantiate environment ---
+env = SolarBatteryEnv(data_sample, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
+
+# --- Reset environment ---
+obs, _ = env.reset()
+print(f"Initial SOC: {env.soc:.2f} kWh\n")
+
+# --- Storage for plotting ---
+steps = []
+soc_list = []
+grid_to_house = []
+grid_to_batt = []
+pv_to_house = []
+pv_to_batt = []
+pv_to_grid = []
+discharge_to_house = []
+discharge_to_grid = []
+costs = []
+rewards = []
+
+# --- Run environment for the full sample ---
+for t in range(len(data_sample)):
+    action = env.action_space.sample()  # random actions
+    obs, reward, done, trunc, info = env.step(action)
+
+    steps.append(t)
+    soc_list.append(env.soc)
+    grid_to_house.append(info['grid_to_house_kWh'])
+    grid_to_batt.append(info['grid_to_batt_kWh'])
+    pv_to_house.append(info['pv_to_house_kWh'])
+    pv_to_batt.append(info['pv_to_batt_kWh'])
+    pv_to_grid.append(info['pv_to_grid_kWh'])
+    discharge_to_house.append(info['discharge_to_house_kWh'])
+    discharge_to_grid.append(info['discharge_to_grid_kWh'])
+    costs.append(info['cost_eur'])
+    rewards.append(reward)
+
+    if done:
+        break
+
+# --- Plot SOC ---
+plt.figure(figsize=(12, 6))
+plt.plot(steps, soc_list, label='Battery SOC [kWh]', color='orange')
+plt.title("Battery SOC over time")
+plt.xlabel("Timestep")
+plt.ylabel("SOC [kWh]")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# --- Plot energy flows stacked ---
+plt.figure(figsize=(14, 6))
+plt.stackplot(
+    steps,
+    grid_to_house,
+    grid_to_batt,
+    pv_to_house,
+    pv_to_batt,
+    pv_to_grid,
+    discharge_to_house,
+    discharge_to_grid,
+    labels=[
+        'Grid -> House', 'Grid -> Batt', 'PV -> House', 'PV -> Batt', 'PV -> Grid',
+        'Batt -> House', 'Batt -> Grid'
+    ],
+    alpha=0.7
+)
+plt.title("Energy Flows Over Time")
+plt.xlabel("Timestep")
+plt.ylabel("Energy [kWh]")
+plt.legend(loc='upper right')
+plt.grid(True)
+plt.show()
+
+# --- Plot reward and cost ---
+plt.figure(figsize=(12, 6))
+plt.plot(steps, rewards, label='Reward', color='blue')
+plt.plot(steps, costs, label='Cost [€]', color='red')
+plt.title("Reward and Cost Over Time")
+plt.xlabel("Timestep")
+plt.ylabel("€ / Reward")
+plt.legend()
+plt.grid(True)
+plt.show()
