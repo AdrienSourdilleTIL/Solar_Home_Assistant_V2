@@ -17,6 +17,9 @@ if not bad_rows.empty:
 # Convert Wh to kWh
 pv_df["P"] = pv_df["P"] / 1000
 
+# Rename datetime column for consistency
+pv_df.rename(columns={"DateTime": "datetime"}, inplace=True)
+
 # Save to new file
 pv_df.to_csv(output_file, index=False)
 print(f"Processed PV production saved to {output_file}")

@@ -13,23 +13,25 @@ df = pd.read_csv(input_path)
 # Strip column names to avoid whitespace issues
 df.columns = df.columns.str.strip()
 
-# Ensure timestamp column exists
-df["DATE"] = pd.to_datetime(df["Date"])
-df = df.sort_values("DATE")
+# Ensure timestamp column exists and rename to 'datetime'
+if "Date" in df.columns:
+    df.rename(columns={"Date": "datetime"}, inplace=True)
+df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce", utc=True)
+df = df.sort_values("datetime")
 
 # Extract useful fields
 df["temperature_C"] = df["TMP"].astype(float)  # already in °C
-df["hour"] = df["DATE"].dt.hour
-df["day_of_week"] = df["DATE"].dt.dayofweek
-df["month"] = df["DATE"].dt.month
+df["hour"] = df["datetime"].dt.hour
+df["day_of_week"] = df["datetime"].dt.dayofweek
+df["month"] = df["datetime"].dt.month
 
 # Mark weekends
 df["is_weekend"] = df["day_of_week"].isin([5, 6])
 
 # Mark holidays (France)
-years = range(df["DATE"].dt.year.min(), df["DATE"].dt.year.max() + 1)
+years = range(df["datetime"].dt.year.min(), df["datetime"].dt.year.max() + 1)
 fr_holidays = holidays.France(years=years)
-df["is_holiday"] = df["DATE"].dt.date.isin(fr_holidays)
+df["is_holiday"] = df["datetime"].dt.date.isin(fr_holidays)
 
 # --- Baseline hourly profile (kWh per hour, normalized to ~14 kWh/day) ---
 base_profile = {
@@ -40,19 +42,10 @@ base_profile = {
 df["base_load"] = df["hour"].map(base_profile)
 
 # --- Modifiers ---
-# Heating demand (below 12°C) - reduced for efficiency
 df["heating_factor"] = np.where(df["temperature_C"] < 12, (12 - df["temperature_C"]) * 0.05, 0)
-
-# Cooling demand (above 24°C) - reduced for efficiency
 df["cooling_factor"] = np.where(df["temperature_C"] > 24, (df["temperature_C"] - 24) * 0.02, 0)
-
-# Weekend boost
 df["weekend_factor"] = np.where(df["is_weekend"], 1.1, 1.0)
-
-# Holiday boost
 df["holiday_factor"] = np.where(df["is_holiday"], 1.2, 1.0)
-
-# Random noise
 np.random.seed(42)
 df["noise"] = np.random.normal(1.0, 0.05, len(df))
 
@@ -64,7 +57,7 @@ df["consumption_kWh"] = (
 
 # --- Keep useful columns ---
 result = df[[
-    "DATE", "consumption_kWh", "temperature_C", "hour",
+    "datetime", "consumption_kWh", "temperature_C", "hour",
     "day_of_week", "is_weekend", "is_holiday"
 ]]
 
