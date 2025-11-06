@@ -6,13 +6,18 @@ from pathlib import Path
 
 # --- Load full training dataset ---
 path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\main\processed\train.csv")
-train_df = pd.read_csv(path)
-
-# --- Use the entire dataset ---
-train_sample = train_df.reset_index(drop=True)
+train_df = pd.read_csv(path).reset_index(drop=True)
 
 # --- Wrap environment ---
-env = SolarBatteryEnv(train_sample, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
+# The env will loop automatically when reset()
+class LoopingSolarEnv(SolarBatteryEnv):
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        if terminated:
+            obs, _ = self.reset()  # reset if episode ends
+        return obs, reward, terminated, truncated, info
+
+env = LoopingSolarEnv(train_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
 
 # --- Vectorized env ---
 vec_env = make_vec_env(lambda: env, n_envs=1)
@@ -22,14 +27,16 @@ model = SAC(
     "MlpPolicy",
     vec_env,
     verbose=1,
-    batch_size=256,
+    batch_size=128,          # smaller batch for stability
     learning_rate=3e-4,
     gamma=0.99,
     tensorboard_log="./solar_batt_tensorboard/"
 )
 
-# --- Train on entire dataset ---
-model.learn(total_timesteps=len(train_sample))  # 1 step per row in dataset
+# --- Train on dataset multiple times ---
+model.learn(total_timesteps=500_000)  # allows agent to see the dataset many times
 
 # --- Save trained model ---
 model.save("./solar_batt_agent_full")
+
+print("✅ Training complete and model saved.")

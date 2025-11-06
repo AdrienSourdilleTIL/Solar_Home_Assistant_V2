@@ -35,9 +35,9 @@ class SolarBatteryEnv(gym.Env):
         self.idx = 0
         self.soc = 0.5 * battery_capacity
 
-        # --- Observation fields (use dataset names directly) ---
+        # --- Observation fields ---
         self.state_cols = [
-            "consumption_kWh", "P", "price", "temperature_C",
+            "consumption_kWh", "P", "buy_price", "sell_price", "temperature_C",
             "hour", "day_of_week", "is_weekend", "is_holiday",
             "Gb(i)", "Gd(i)", "Gr(i)", "H_sun", "T2m", "WS10m"
         ]
@@ -77,7 +77,8 @@ class SolarBatteryEnv(gym.Env):
         # Current energy context
         consumption = row["consumption_kWh"]
         pv = max(row["P"], 0.0)
-        price = row["price"]
+        price_buy = row["buy_price"]   # price for importing from grid
+        price_sell = row["sell_price"] # price for exporting to grid
 
         # Parse and clip actions
         pv_to_house_frac = float(np.clip(action[0], 0, 1))
@@ -122,7 +123,7 @@ class SolarBatteryEnv(gym.Env):
         energy_to_grid = pv_to_grid + discharge_to_grid
 
         # --- Costs and reward ---
-        gross_cost = energy_from_grid * price - energy_to_grid * price
+        gross_cost = energy_from_grid * price_buy - energy_to_grid * price_sell
         degradation_penalty = self.degradation_cost * (batt_charge_energy + battery_used)
         reward = -(gross_cost + degradation_penalty)
 
@@ -158,5 +159,3 @@ class SolarBatteryEnv(gym.Env):
 
     def render(self):
         print(f"Step {self.idx}: SOC={self.soc:.2f} kWh")
-
-

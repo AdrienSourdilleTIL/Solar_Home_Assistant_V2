@@ -13,7 +13,7 @@ df = df.sort_values("datetime").fillna(method="ffill").fillna(0)
 state_cols = [
     "consumption_kWh", "temperature_C", "hour", "day_of_week",
     "is_weekend", "is_holiday", "P", "Gb(i)", "Gd(i)", "Gr(i)",
-    "price", "pv_forecast_1", "load_forecast_1"
+    "buy_price","sell_price", "pv_forecast_1", "load_forecast_1"
 ]
 
 # --- Skip normalization --- 
