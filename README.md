@@ -1,54 +1,95 @@
-Solar+Storage RL Energy Management
-Overview
+# Solar Battery Reinforcement Learning Agent
 
-This project aims to develop a reinforcement learning (RL) agent to manage a residential solar + battery storage system connected to the grid. The agent’s goal is to optimize electricity usage and storage to minimize costs, maximize revenue, and smartly manage battery life.
+## Overview
 
-The system can take the following actions at any time:
+Imagine you’ve just installed solar panels and a home battery. You want to **use as much of your solar energy as possible**, reduce your reliance on the grid, and ideally **save money** by storing energy when it’s cheap and selling it back when prices are high. But deciding **when to charge, discharge, buy, or sell electricity** is tricky — energy patterns are complex, prices fluctuate, and your consumption changes hour by hour.
 
-Charge battery from PV production
+This project explores how a **reinforcement learning (RL) agent** can take over these decisions. Using historical data, forecasts, and environmental variables, the agent learns the best way to manage a household battery to **maximize self-consumption and minimize energy costs** — outperforming traditional rule-based strategies.
 
-Charge battery from the grid
+![Cumulative Reward Comparison](outputs/cumulative_rewards_comparison.png)
 
-Discharge battery to home consumption
+The graph above shows cumulative rewards over a test year (2023), comparing:  
+- **Trained SAC Agent**  
+- **Simple Rule-Based Policy**  
+- **Forecast-Aware / Context-Aware Rule-Based Policy**  
 
-Discharge battery to the grid
+Even with more sophisticated rule-based logic and access to forecasts, the RL agent consistently achieves higher rewards. It learns subtle patterns in energy usage, solar production, and price fluctuations — patterns that are difficult to capture with fixed rules.
 
-Stay idle
+---
 
-The RL agent must make decisions under uncertainty, relying on forecasts and past observations to optimize outcomes in a real-world setting.
+## How It Works
 
-Objectives
+The environment simulates a **household with solar panels and a battery**, where every timestep represents one hour. It provides:
 
-Cost saving and revenue maximization – The primary goal is to reduce electricity costs or earn revenue by intelligently using the battery and grid.
+- Current **PV production** and **household consumption**  
+- **Battery state of charge (SOC)**  
+- Environmental data: `temperature`, `pressure`, `solar irradiance`, `wind speed`  
+- Energy prices (`buy_price`, `sell_price`)  
+- **Forecasts** for PV production and load for up to 12 hours ahead  
 
-Battery preservation – Encourage smart battery usage to extend battery life (secondary objective).
+At each timestep, the agent decides:  
+- How much PV energy to **consume immediately**  
+- How much to **store in the battery**  
+- How much to **discharge to the house**  
+- Whether to **buy or sell electricity**  
 
-Self-sufficiency – Maintain capacity to support the home during potential grid outages (secondary objective).
+The **reward function** encourages self-consumption, selling at profitable times, and minimizing grid purchases. Over time, the agent learns the optimal strategy that balances all these factors.
 
-Data Requirements
+---
 
-To train and operate the agent, the following data is collected:
+## Rule-Based Policies for Comparison
 
-Day-ahead electricity spot prices (hourly)
+We implemented two rule-based strategies:
 
-Historical PV production (hourly)
+1. **Simple Rule-Based Policy**  
+   - Self-consumes PV first  
+   - Charges the battery if there’s excess PV  
+   - Discharges battery when PV is insufficient  
+   - Falls back to the grid when needed  
 
-Weather data (temperature, solar irradiance, cloud cover, etc.)
+2. **Forecast-Aware / Context-Aware Rule-Based Policy**  
+   - Uses up to **12-hour forecasts** of PV and load  
+   - Adjusts battery reserves based on time of day and expected PV  
+   - Considers energy prices for buying and selling  
 
-Home consumption data (hourly)
+Even though the forecast-aware policy is more sophisticated, it **cannot fully match the agent**. The RL agent learns non-linear, context-dependent strategies that a fixed set of rules cannot replicate.
 
-Forecasts (optional for training, can include PV production and consumption forecasts)
+---
 
-The training dataset will combine all relevant features for each hour, including spot prices, production, consumption, and environmental variables.
+## Training the Agent
 
-Methodology
+- **Algorithm:** Soft Actor-Critic (SAC), a state-of-the-art off-policy RL method  
+- **Training data:** 2015–2022 (~6 years)  
+- **Testing data:** 2023 (1 year)  
+- Observations include environmental variables, PV production, load, forecasts, and prices  
+- The agent learns to maximize **cumulative reward**, considering both immediate and future outcomes  
 
-Data Gathering – Pull historical and forecasted spot prices, PV production, weather, and consumption data.
+---
 
-Data Preprocessing – Align data in an hourly timeseries, handle missing values, and optionally add noise to simulate forecast errors.
+## Why It Matters
 
-RL Environment Setup – Define state space (features), action space (possible battery/grid actions), and reward function (cost/revenue optimization with secondary objectives).
+For a homeowner, this means:  
 
-Training the Agent – Use RL algorithms (e.g., PPO, DQN, or recurrent policies) to train the agent under realistic conditions.
+- **Saving money** by using solar energy efficiently and selling excess at the right time  
+- **Reducing grid dependency** while maintaining comfort  
+- **Automating battery management** without manually checking consumption or production  
+- Seeing, in practice, how a reinforcement learning agent can **outperform even smart rule-based strategies** in energy optimization  
 
-Evaluation – Test the agent on unseen data and analyze cost savings, battery usage, and performance under uncertainty.
+This project demonstrates how data-driven control can make household solar and battery systems **smarter, more efficient, and cost-effective**.
+
+---
+
+## Files
+
+- `gym_env.py` — Simulates PV-battery environment  
+- `solar_batt_agent_full.zip` — Trained SAC agent  
+- `test.csv` — Test dataset (2023)  
+- `outputs/cumulative_rewards_comparison.png` — Graph comparing agent and rule-based policies  
+
+---
+
+## Next Steps
+
+- Expand to **multi-household simulations** for neighborhood-level energy optimization  
+- Integrate **dynamic electricity tariffs** in real time  
+- Deploy as a **home automation system** for battery management  

@@ -43,7 +43,7 @@ while True:
 
 # --- Save to CSV ---
 output_df = pd.DataFrame(records)
-output_path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\agent_step_data.csv")
+output_path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\outputs\agent_step_data.csv")
 output_df.to_csv(output_path, index=False)
 
 print(f"Saved {len(output_df)} steps to {output_path}")
