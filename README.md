@@ -2,7 +2,7 @@
 
 ## Overview
 
-Imagine you’ve just installed solar panels and a home battery in France. Your goal is simple: **use your solar energy efficiently**, reduce electricity bills, and perhaps even sell excess energy back to the grid. But making smart decisions about **when to charge, discharge, buy, or sell electricity** is tricky — consumption fluctuates hourly, PV production is variable, and electricity prices can change as well.
+Imagine you’ve just installed solar panels and a home battery. Your goal is simple: **use your solar energy efficiently**, reduce electricity bills, and perhaps even sell excess energy back to the grid. But making smart decisions about **when to charge, discharge, buy, or sell electricity** is tricky — consumption fluctuates hourly, PV production is variable, and electricity prices can change as well.
 
 In France, the situation has changed:
 
