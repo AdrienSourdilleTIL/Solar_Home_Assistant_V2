@@ -2,12 +2,12 @@
 
 ## Overview
 
-Imagine you’ve just installed solar panels and a home battery in France. Your goal is simple: **use your solar energy efficiently**, reduce electricity bills, and perhaps even sell excess energy back to the grid. But making smart decisions about **when to charge, discharge, buy, or sell electricity** is tricky — consumption fluctuates hourly, PV production is variable, and electricity prices continue to rise.
+Imagine you’ve just installed solar panels and a home battery in France. Your goal is simple: **use your solar energy efficiently**, reduce electricity bills, and perhaps even sell excess energy back to the grid. But making smart decisions about **when to charge, discharge, buy, or sell electricity** is tricky — consumption fluctuates hourly, PV production is variable, and electricity prices can change as well.
 
 In France, the situation has changed:
 
-- **Before 2025:** households could sign fixed-price contracts to sell all PV electricity at around **30 cents/kWh**, often more than the grid purchase price. Selling everything was highly incentivized.  
-- **Now:** selling prices dropped to around **4 cents/kWh**, while electricity purchase prices continue to increase. This makes **self-consumption and smart battery management more important than ever**, requiring strategies that consider forecasts, consumption patterns, and battery state.
+- **Before 2025:** households could sign fixed-price contracts to sell their PV electricity for up to **35 cents/kWh**, often more than the grid purchase price. Selling everything was highly incentivized.  
+- **Now:** selling prices dropped to around **4 cents/kWh**, while purchasing electricity from the grid got more expensive. This makes **self-consumption and smart battery management more important than ever**, requiring strategies that consider forecasts, consumption patterns, and battery state.
 
 A **reinforcement learning (RL) agent** can manage these decisions dynamically, outperforming rule-based approaches and maximizing household energy efficiency.
 
