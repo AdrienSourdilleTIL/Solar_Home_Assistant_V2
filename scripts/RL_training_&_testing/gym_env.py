@@ -6,12 +6,11 @@ from gymnasium import spaces
 
 class SolarBatteryEnv(gym.Env):
     """
-    Solar-battery-grid environment where the agent decides how to allocate energy flows.
-    The agent decides:
-        - how much PV goes to battery vs grid vs house
-        - how much battery discharges to house vs grid
-        - how much to import from grid to charge the battery
-    The environment ensures home consumption is always met (grid compensates deficits).
+    Solar-battery-grid environment where the agent allocates energy:
+        - PV to house, battery, or grid
+        - Battery discharge to house or grid
+        - Grid energy to charge battery
+    The environment ensures home consumption is always met.
     """
 
     metadata = {"render_modes": ["human"]}
@@ -30,7 +29,7 @@ class SolarBatteryEnv(gym.Env):
         self.max_charge_rate = max_charge_rate
         self.timestep_h = timestep_h
         self.eta = eta
-        self.degradation_cost = degradation_cost  # penalty for cycling battery
+        self.degradation_cost = degradation_cost
 
         self.idx = 0
         self.soc = 0.5 * battery_capacity
@@ -41,58 +40,60 @@ class SolarBatteryEnv(gym.Env):
             "hour", "day_of_week", "is_weekend", "is_holiday",
             "Gb(i)", "Gd(i)", "Gr(i)", "H_sun", "T2m", "WS10m"
         ]
-
-        # Add all forecast columns (pv_forecast_X and load_forecast_X)
+        # Add forecast columns
         forecast_cols = [c for c in data.columns if c.startswith("pv_forecast_") or c.startswith("load_forecast_")]
         self.state_cols += forecast_cols
 
-        # --- Normalization factors ---
+        # Normalization factors
         self.norm_factors = {col: self.data[col].abs().max() + 1e-8 for col in self.state_cols}
         self.norm_factors["soc"] = battery_capacity
 
-        # --- Spaces ---
+        # Observation space
         obs_dim = len(self.state_cols) + 1  # include SOC
         self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
 
         # Action space:
-        # action[0]: fraction of PV sent to house (0–1)
-        # action[1]: fraction of PV sent to battery (0–1)
-        # (remainder goes to grid)
-        # action[2]: fraction of battery discharge sent to house (0–1)
-        # (remainder goes to grid)
-        # action[3]: fraction of grid energy used to charge battery (0–1)
+        # 0: PV to house fraction
+        # 1: PV to battery fraction
+        # 2: Battery discharge to house fraction
+        # 3: Grid to battery fraction
         self.action_space = spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32)
 
-    # --- Helpers ---
     def _get_obs(self):
         row = self.data.iloc[self.idx]
         obs_values = [row[c] / self.norm_factors[c] for c in self.state_cols]
         obs_values.append(self.soc / self.norm_factors["soc"])
         return np.array(obs_values, dtype=np.float32)
 
-    # --- Step logic ---
     def step(self, action):
         row = self.data.iloc[self.idx]
 
-        # Current energy context
+        # --- Parse inputs ---
         consumption = row["consumption_kWh"]
         pv = max(row["P"], 0.0)
-        price_buy = row["buy_price"]   # price for importing from grid
-        price_sell = row["sell_price"] # price for exporting to grid
+        price_buy = row["buy_price"]
+        price_sell = row["sell_price"]
 
-        # Parse and clip actions
+        # --- Clip raw fractions ---
         pv_to_house_frac = float(np.clip(action[0], 0, 1))
         pv_to_batt_frac = float(np.clip(action[1], 0, 1))
         batt_to_house_frac = float(np.clip(action[2], 0, 1))
         grid_to_batt_frac = float(np.clip(action[3], 0, 1))
 
+        # --- Normalize PV fractions to sum <= 1 ---
+        pv_frac_total = pv_to_house_frac + pv_to_batt_frac
+        if pv_frac_total > 1.0:
+            pv_to_house_frac /= pv_frac_total
+            pv_to_batt_frac /= pv_frac_total
+        pv_to_grid_frac = 1.0 - pv_to_house_frac - pv_to_batt_frac
+
         # --- PV allocation ---
         pv_to_house = pv * pv_to_house_frac
         pv_to_batt = pv * pv_to_batt_frac
-        pv_to_grid = max(pv - pv_to_house - pv_to_batt, 0)
+        pv_to_grid = pv * pv_to_grid_frac
 
         # --- Battery discharge ---
-        batt_discharge_power = self.max_charge_rate  # max discharge capacity
+        batt_discharge_power = self.max_charge_rate
         discharge_to_house = 0.0
         discharge_to_grid = 0.0
         battery_used = 0.0
@@ -103,17 +104,17 @@ class SolarBatteryEnv(gym.Env):
             discharge_to_grid = available_energy * (1 - batt_to_house_frac) * self.eta
             battery_used = available_energy
 
-        # --- Grid and battery charging ---
+        # --- Grid to battery charging ---
         grid_to_batt = 0.0
         if self.soc < self.battery_capacity:
             grid_to_batt = self.max_charge_rate * grid_to_batt_frac * self.timestep_h
-            grid_to_batt = min(grid_to_batt, (self.battery_capacity - self.soc))
+            grid_to_batt = min(grid_to_batt, self.battery_capacity - self.soc)
 
-        # Effective battery charging
+        # --- Update battery SOC ---
         batt_charge_energy = (pv_to_batt + grid_to_batt) * self.eta
         self.soc = np.clip(self.soc + batt_charge_energy - battery_used, 0, self.battery_capacity)
 
-        # --- Energy to meet house demand ---
+        # --- Meet house demand ---
         energy_supplied = pv_to_house + discharge_to_house
         energy_deficit = max(consumption - energy_supplied, 0)
         grid_to_house = energy_deficit
@@ -144,7 +145,7 @@ class SolarBatteryEnv(gym.Env):
             degradation_penalty=degradation_penalty
         )
 
-        # Advance time
+        # Advance timestep
         self.idx += 1
         terminated = self.idx >= len(self.data) - 1
         truncated = False
