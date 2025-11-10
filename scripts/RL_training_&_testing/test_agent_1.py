@@ -1,20 +1,45 @@
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from gym_env import SolarBatteryEnv
 from stable_baselines3 import SAC
-import numpy as np
 
 # --- Load test dataset ---
 test_path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\main\processed\test.csv")
 test_df = pd.read_csv(test_path).reset_index(drop=True)
 
-# --- Instantiate environments ---
-env_agent = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
-env_rule = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
-env_forecast_rule = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
+# --- Reproduce training preprocessing ---
+# Drop redundant irradiance columns
+for col in ["Gb", "Gd", "Gr"]:
+    if col in test_df.columns:
+        test_df = test_df.drop(columns=[col])
 
-# --- Load newly trained model with env alignment ---
+# Cyclical encodings
+if "hour" in test_df.columns:
+    test_df["hour_sin"] = np.sin(2 * np.pi * test_df["hour"] / 24)
+    test_df["hour_cos"] = np.cos(2 * np.pi * test_df["hour"] / 24)
+    test_df = test_df.drop(columns=["hour"])
+
+if "day_of_week" in test_df.columns:
+    test_df["day_sin"] = np.sin(2 * np.pi * test_df["day_of_week"] / 7)
+    test_df["day_cos"] = np.cos(2 * np.pi * test_df["day_of_week"] / 7)
+    test_df = test_df.drop(columns=["day_of_week"])
+
+# Lagged features (past 3 timesteps)
+lag_features = ["P", "consumption_kWh", "buy_price", "sell_price"]
+for col in lag_features:
+    if col in test_df.columns:
+        for lag in range(1, 4):
+            test_df[f"{col}_lag{lag}"] = test_df[col].shift(lag)
+test_df = test_df.dropna().reset_index(drop=True)
+
+# --- Instantiate environments ---
+env_agent = SolarBatteryEnv(test_df)
+env_rule = SolarBatteryEnv(test_df)
+env_forecast_rule = SolarBatteryEnv(test_df)
+
+# --- Load trained SAC agent ---
 model = SAC.load(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\solar_batt_agent_weekly_lagged.zip", env=env_agent)
 
 # --- Run Trained Agent ---
@@ -27,7 +52,7 @@ while not done:
     rewards_agent.append(reward)
     done = terminated
 
-# --- Run Original Rule-Based Policy ---
+# --- Run Simple Rule-Based Policy ---
 obs, _ = env_rule.reset()
 rewards_rule = []
 done = False
@@ -72,12 +97,12 @@ while not done:
     soc = env_forecast_rule.soc
     batt_cap = env_forecast_rule.battery_capacity
     max_rate = env_forecast_rule.max_charge_rate
-    hour = row["hour"]
+    hour = row.get("hour_sin", 12) * 24  # approximate hour if not present
     buy_price = row["buy_price"]
     sell_price = row["sell_price"]
 
-    future_pv = np.mean([row[f"pv_forecast_{i}"] for i in range(1, 7)])
-    future_load = np.mean([row[f"load_forecast_{i}"] for i in range(1, 7)])
+    future_pv = np.mean([row[f"pv_forecast_{i}"] for i in range(1, 7) if f"pv_forecast_{i}" in row])
+    future_load = np.mean([row[f"load_forecast_{i}"] for i in range(1, 7) if f"load_forecast_{i}" in row])
 
     pv_to_house_frac = 0.0
     pv_to_batt_frac = 0.0
@@ -130,8 +155,11 @@ plt.plot(cumulative_rule, label="Simple Rule-Based", color="green")
 plt.plot(cumulative_forecast_rule, label="Forecast-Aware Rule-Based", color="orange")
 plt.xlabel("Timestep")
 plt.ylabel("Cumulative Reward")
-plt.title("Cumulative Reward Comparison: Agent vs Rule-Based Policies (Forecast-Aware)")
+plt.title("Cumulative Reward Comparison: Agent vs Rule-Based Policies")
 plt.legend()
 plt.grid(True)
-plt.savefig(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\outputs\cumulative_rewards_comparison.png", dpi=300)
+output_path = r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\outputs\cumulative_rewards_comparison.png"
+plt.savefig(output_path)
 plt.close()
+
+print(f"Graph saved to {output_path}")

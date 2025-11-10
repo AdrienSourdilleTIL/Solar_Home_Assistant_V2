@@ -1,140 +1,87 @@
 import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
-from gym_env import SolarBatteryEnv
-from stable_baselines3 import SAC
 import numpy as np
+from pathlib import Path
+from stable_baselines3 import SAC
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.monitor import Monitor
+from gym_env import SolarBatteryEnv  # your environment
 
-# --- Load test dataset ---
-test_path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\main\processed\test.csv")
-test_df = pd.read_csv(test_path).reset_index(drop=True)
+# --- Load dataset ---
+data_path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\main\processed\train.csv")
+df = pd.read_csv(data_path).reset_index(drop=True)
 
-# --- Instantiate environments ---
-env_agent = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
-env_rule = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
-env_forecast_rule = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
+# --- Feature cleanup ---
+# Remove redundant irradiance columns if present
+for col in ["Gb", "Gd", "Gr"]:
+    if col in df.columns:
+        df = df.drop(columns=[col])
 
-# --- Load trained model and explicitly bind it to the environment ---
-model = SAC.load(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\solar_batt_agent_weekly_lagged.zip", env=env_agent)
+# --- Create cyclical encodings ---
+if "hour" in df.columns:
+    df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
+    df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
+    df = df.drop(columns=["hour"])
 
-# --- Run Trained Agent ---
-obs, _ = env_agent.reset()
-rewards_agent = []
+if "day_of_week" in df.columns:
+    df["day_sin"] = np.sin(2 * np.pi * df["day_of_week"] / 7)
+    df["day_cos"] = np.cos(2 * np.pi * df["day_of_week"] / 7)
+    df = df.drop(columns=["day_of_week"])
 
-while True:
-    action, _ = model.predict(obs, deterministic=True)
-    obs, reward, terminated, truncated, info = env_agent.step(action)
-    rewards_agent.append(reward)
-    if terminated:
-        break
+# --- Lagged features for past 3 timesteps ---
+lag_features = ["P", "consumption_kWh", "buy_price", "sell_price"]
+for col in lag_features:
+    if col in df.columns:
+        for lag in range(1, 4):
+            df[f"{col}_lag{lag}"] = df[col].shift(lag)
 
-# --- Run Original Rule-Based Policy ---
-obs, _ = env_rule.reset()
-rewards_rule = []
+df = df.dropna().reset_index(drop=True)
 
-while True:
-    row = test_df.iloc[env_rule.idx]
-    pv = max(row["P"], 0.0)
-    consumption = row["consumption_kWh"]
-    soc = env_rule.soc
-    batt_cap = env_rule.battery_capacity
-    max_rate = env_rule.max_charge_rate
+# --- Optional: custom environment wrapper for weekly random starts ---
+class RandomStartWeeklyEnv(SolarBatteryEnv):
+    def __init__(self, data, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0, episode_length=24*7):
+        super().__init__(data, battery_capacity, max_charge_rate, timestep_h)
+        self.episode_length = episode_length
+        self.steps_in_episode = 0
 
-    pv_to_house_frac = 0.0
-    pv_to_batt_frac = 0.0
-    batt_to_house_frac = 0.0
-    grid_to_batt_frac = 0.0
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        self.idx = np.random.randint(0, len(self.data) - self.episode_length)
+        self.steps_in_episode = 0
+        return self._get_obs(), {}
 
-    if pv >= consumption:
-        pv_to_house_frac = consumption / pv
-        excess_pv = pv - consumption
-        batt_room = batt_cap - soc
-        pv_to_batt = min(excess_pv, max_rate, batt_room)
-        pv_to_batt_frac = pv_to_batt / pv
-    else:
-        pv_to_house_frac = pv / consumption if consumption > 0 else 0.0
-        deficit = consumption - pv
-        discharge = min(deficit, soc, max_rate)
-        batt_to_house_frac = discharge / soc if soc > 0 else 0.0
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        self.steps_in_episode += 1
+        if self.steps_in_episode >= self.episode_length:
+            terminated = True
+        return obs, reward, terminated, truncated, info
 
-    action = np.array([pv_to_house_frac, pv_to_batt_frac, batt_to_house_frac, grid_to_batt_frac], dtype=np.float32)
-    obs, reward, terminated, truncated, info = env_rule.step(action)
-    rewards_rule.append(reward)
-    if terminated:
-        break
+# --- Helper to wrap environment with Monitor ---
+def make_env():
+    env = RandomStartWeeklyEnv(
+        data=df,
+        battery_capacity=10.0,
+        max_charge_rate=5.0,
+        timestep_h=1.0,
+        episode_length=24*7
+    )
+    return Monitor(env)
 
-# --- Run Forecast-Aware Rule-Based Policy ---
-obs, _ = env_forecast_rule.reset()
-rewards_forecast_rule = []
+# --- Vectorized environments ---
+vec_env = make_vec_env(make_env, n_envs=4)
 
-while True:
-    row = test_df.iloc[env_forecast_rule.idx]
-    pv = max(row["P"], 0.0)
-    consumption = row["consumption_kWh"]
-    soc = env_forecast_rule.soc
-    batt_cap = env_forecast_rule.battery_capacity
-    max_rate = env_forecast_rule.max_charge_rate
-    hour = row["hour"]
-    buy_price = row["buy_price"]
-    sell_price = row["sell_price"]
+# --- SAC agent ---
+model = SAC(
+    "MlpPolicy",
+    vec_env,
+    verbose=1,
+    batch_size=128,
+    learning_rate=3e-4,
+    gamma=0.99,
+    tensorboard_log="./solar_batt_tensorboard/"
+)
 
-    # Short-term forecast signals
-    future_pv = np.mean([row[f"pv_forecast_{i}"] for i in range(1, 7)])
-    future_load = np.mean([row[f"load_forecast_{i}"] for i in range(1, 7)])
-
-    pv_to_house_frac = 0.0
-    pv_to_batt_frac = 0.0
-    batt_to_house_frac = 0.0
-    grid_to_batt_frac = 0.0
-
-    batt_room = batt_cap - soc
-    future_deficit = future_load - future_pv
-
-    if future_pv > future_load:
-        reserve = 0.05 * batt_cap
-    elif 17 <= hour <= 22:
-        reserve = 0.25 * batt_cap
-    else:
-        reserve = 0.15 * batt_cap
-
-    if pv >= consumption:
-        pv_to_house_frac = consumption / pv
-        surplus = pv - consumption
-        charge_factor = 0.5 if future_pv > future_load * 1.2 else 1.0
-        pv_to_batt = min(surplus * charge_factor, batt_room, max_rate)
-        pv_to_batt_frac = pv_to_batt / pv
-        if sell_price > buy_price * 0.8 and batt_room < 1.0:
-            pv_to_batt_frac *= 0.8
-    else:
-        pv_to_house_frac = pv / consumption if consumption > 0 else 0.0
-        deficit = consumption - pv
-        discharge_factor = 1.0 if future_deficit > 0 else 0.6
-        discharge = min(deficit, max(0, soc - reserve), max_rate) * discharge_factor
-        batt_to_house_frac = discharge / soc if soc > 0 else 0.0
-        deficit -= discharge
-        if buy_price < sell_price * 0.6 and future_pv < future_load * 0.8 and batt_room > 0.5 * batt_cap:
-            grid_to_batt_frac = 0.5
-
-    action = np.array([pv_to_house_frac, pv_to_batt_frac, batt_to_house_frac, grid_to_batt_frac], dtype=np.float32)
-    obs, reward, terminated, truncated, info = env_forecast_rule.step(action)
-    rewards_forecast_rule.append(reward)
-    if terminated:
-        break
-
-# --- Compute cumulative rewards ---
-cumulative_agent = np.cumsum(rewards_agent)
-cumulative_rule = np.cumsum(rewards_rule)
-cumulative_forecast_rule = np.cumsum(rewards_forecast_rule)
-
-# --- Plot cumulative rewards ---
-plt.figure(figsize=(14, 7))
-plt.plot(cumulative_agent, label="Trained Agent", color="blue")
-plt.plot(cumulative_rule, label="Simple Rule-Based", color="green")
-plt.plot(cumulative_forecast_rule, label="Forecast-Aware Rule-Based", color="orange")
-plt.xlabel("Timestep")
-plt.ylabel("Cumulative Reward")
-plt.title("Cumulative Reward Comparison: Agent vs Rule-Based Policies")
-plt.legend()
-plt.grid(True)
-plt.savefig(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\outputs\cumulative_rewards_comparison.png", dpi=300)
-plt.close()
+# --- Train the agent ---
+model.learn(total_timesteps=200000)
+model.save("./solar_batt_agent_weekly_lagged")
+print("✅ Training complete and model saved!")
