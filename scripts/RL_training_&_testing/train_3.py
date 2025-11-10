@@ -1,5 +1,4 @@
 from stable_baselines3 import SAC
-from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.monitor import Monitor
 from gym_env import SolarBatteryEnv
 import pandas as pd
@@ -25,7 +24,6 @@ if "day_of_week" in train_df.columns:
     train_df["day_cos"] = np.cos(2 * np.pi * train_df["day_of_week"] / 7)
     train_df = train_df.drop(columns=["day_of_week"])
 
-
 # --- Lagged features (past 3 hours of key signals) ---
 lag_features = ["P_pv", "P_load", "price", "soc"]
 for col in lag_features:
@@ -34,8 +32,7 @@ for col in lag_features:
             train_df[f"{col}_lag{lag}"] = train_df[col].shift(lag)
 train_df = train_df.dropna().reset_index(drop=True)
 
-
-# --- Environment with weekly episodes ---
+# --- Environment with weekly random start ---
 class RandomStartWeeklyEnv(SolarBatteryEnv):
     def __init__(self, data, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0, episode_length=24*7):
         super().__init__(data, battery_capacity, max_charge_rate, timestep_h)
@@ -55,26 +52,20 @@ class RandomStartWeeklyEnv(SolarBatteryEnv):
             terminated = True
         return obs, reward, terminated, truncated, info
 
-
-# --- Helper to wrap with Monitor ---
-def make_env():
-    env = RandomStartWeeklyEnv(
-        train_df,
-        battery_capacity=10.0,
-        max_charge_rate=5.0,
-        timestep_h=1.0,
-        episode_length=24*7
-    )
-    return Monitor(env)
-
-
-# --- Vectorized environment ---
-vec_env = make_vec_env(make_env, n_envs=4)
+# --- Instantiate environment and wrap with Monitor ---
+env = RandomStartWeeklyEnv(
+    train_df,
+    battery_capacity=10.0,
+    max_charge_rate=5.0,
+    timestep_h=1.0,
+    episode_length=24*7
+)
+env = Monitor(env)
 
 # --- SAC agent ---
 model = SAC(
     "MlpPolicy",
-    vec_env,
+    env,
     verbose=1,
     batch_size=128,
     learning_rate=3e-4,
@@ -83,6 +74,8 @@ model = SAC(
 )
 
 # --- Train ---
-model.learn(total_timesteps=200_000)
+model.learn(total_timesteps=10_000)
+
+# --- Save trained model ---
 model.save("./solar_batt_agent_weekly_lagged")
 print("✅ Training complete and model saved with lagged features & cyclical time encoding.")

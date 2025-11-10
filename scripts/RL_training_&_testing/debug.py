@@ -1,32 +1,39 @@
+from stable_baselines3 import SAC
 from gym_env import SolarBatteryEnv
 import pandas as pd
-from stable_baselines3 import SAC
 import numpy as np
+from pathlib import Path
 
 # --- Load dataset ---
-df = pd.read_csv(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\main\processed\train.csv")
+df_path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\data\main\processed\train.csv")
+df = pd.read_csv(df_path).reset_index(drop=True)
 
-# --- Initialize environment ---
+# --- Instantiate environment ---
 env = SolarBatteryEnv(df)
 
-print("Environment observation space shape:", env.observation_space.shape)
+# --- Print environment observation space ---
+print("✅ Environment observation space shape:", env.observation_space.shape)
 
-# --- Get a sample observation from the env ---
+# --- Sample an observation ---
 obs, _ = env.reset()
 print("Sample observation shape:", obs.shape)
-print("Sample observation values (first 10):", obs[:10])
+print("Sample observation (first 10 values):", obs[:10])
 
-# --- Load trained model ---
-model_path = r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\solar_batt_agent_weekly_lagged.zip"
+# --- Load trained SAC model ---
+model_path = Path(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\solar_batt_agent_weekly_lagged.zip")
 model = SAC.load(model_path)
 
-# --- Inspect model input space ---
-print("Model expected observation space:", model.observation_space)
-print("Model expected observation shape:", model.observation_space.shape)
+# --- Print model observation space ---
+if hasattr(model, 'observation_space'):
+    model_obs_space = model.observation_space
+else:
+    # Older versions may have it in policy
+    model_obs_space = model.policy.observation_space
+print("✅ Model expected observation space:", model_obs_space)
+print("Model expected observation shape:", model_obs_space.shape)
 
-# --- Test if the env obs matches model obs shape ---
-try:
-    action, _ = model.predict(obs, deterministic=True)
-    print("✅ Model can process environment observation")
-except ValueError as e:
-    print("❌ Model cannot process environment observation:", e)
+# --- Compare shapes ---
+if env.observation_space.shape == model_obs_space.shape:
+    print("✅ Environment and model observation shapes match.")
+else:
+    print("❌ Mismatch detected! Environment vs model:", env.observation_space.shape, "vs", model_obs_space.shape)
