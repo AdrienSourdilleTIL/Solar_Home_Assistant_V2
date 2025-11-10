@@ -14,23 +14,24 @@ env_agent = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0,
 env_rule = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
 env_forecast_rule = SolarBatteryEnv(test_df, battery_capacity=10.0, max_charge_rate=5.0, timestep_h=1.0)
 
-# --- Load trained model ---
-model = SAC.load(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\solar_batt_agent_full.zip")
+# --- Load newly trained model with env alignment ---
+model = SAC.load(r"C:\Users\AdrienSourdille\Solar_Home_Assistant_V2\solar_batt_agent_weekly_lagged.zip", env=env_agent)
 
 # --- Run Trained Agent ---
 obs, _ = env_agent.reset()
 rewards_agent = []
-while True:
+done = False
+while not done:
     action, _ = model.predict(obs, deterministic=True)
     obs, reward, terminated, truncated, info = env_agent.step(action)
     rewards_agent.append(reward)
-    if terminated:
-        break
+    done = terminated
 
 # --- Run Original Rule-Based Policy ---
 obs, _ = env_rule.reset()
 rewards_rule = []
-while True:
+done = False
+while not done:
     row = test_df.iloc[env_rule.idx]
     pv = max(row["P"], 0.0)
     consumption = row["consumption_kWh"]
@@ -58,15 +59,13 @@ while True:
     action = np.array([pv_to_house_frac, pv_to_batt_frac, batt_to_house_frac, grid_to_batt_frac], dtype=np.float32)
     obs, reward, terminated, truncated, info = env_rule.step(action)
     rewards_rule.append(reward)
-    if terminated:
-        break
-
+    done = terminated
 
 # --- Run Forecast-Aware Rule-Based Policy ---
 obs, _ = env_forecast_rule.reset()
 rewards_forecast_rule = []
-
-while True:
+done = False
+while not done:
     row = test_df.iloc[env_forecast_rule.idx]
     pv = max(row["P"], 0.0)
     consumption = row["consumption_kWh"]
@@ -77,7 +76,6 @@ while True:
     buy_price = row["buy_price"]
     sell_price = row["sell_price"]
 
-    # --- Aggregate short-term forecast signals (next 6 hours for smoother behavior) ---
     future_pv = np.mean([row[f"pv_forecast_{i}"] for i in range(1, 7)])
     future_load = np.mean([row[f"load_forecast_{i}"] for i in range(1, 7)])
 
@@ -89,62 +87,36 @@ while True:
     batt_room = batt_cap - soc
     future_deficit = future_load - future_pv
 
-    # --- Compute dynamic reserve based on PV outlook and time ---
+    # Dynamic reserve
     if future_pv > future_load:
-        reserve = 0.05 * batt_cap  # sunny hours coming
+        reserve = 0.05 * batt_cap
     elif 17 <= hour <= 22:
-        reserve = 0.25 * batt_cap  # evening: hold more
+        reserve = 0.25 * batt_cap
     else:
-        reserve = 0.15 * batt_cap  # neutral baseline
+        reserve = 0.15 * batt_cap
 
-    # --- Decision logic ---
     if pv >= consumption:
-        # Self-consume first
         pv_to_house_frac = consumption / pv
         surplus = pv - consumption
-
-        # If future PV is high, save room — charge less now
         charge_factor = 0.5 if future_pv > future_load * 1.2 else 1.0
-
-        # Charge battery (limited by available capacity, max_rate, and outlook)
         pv_to_batt = min(surplus * charge_factor, batt_room, max_rate)
         pv_to_batt_frac = pv_to_batt / pv
-
-        # Sell remaining PV if sell_price high
         if sell_price > buy_price * 0.8 and batt_room < 1.0:
-            pv_to_batt_frac *= 0.8  # slightly prefer selling when profitable
-
+            pv_to_batt_frac *= 0.8
     else:
-        # PV < consumption
         pv_to_house_frac = pv / consumption if consumption > 0 else 0.0
         deficit = consumption - pv
-
-        # If future PV is low and future load high → discharge aggressively
-        if future_deficit > 0:
-            discharge_factor = 1.0
-        else:
-            discharge_factor = 0.6
-
+        discharge_factor = 1.0 if future_deficit > 0 else 0.6
         discharge = min(deficit, max(0, soc - reserve), max_rate) * discharge_factor
         batt_to_house_frac = discharge / soc if soc > 0 else 0.0
         deficit -= discharge
-
-        # Optional: grid charging when cheap and low PV ahead
         if buy_price < sell_price * 0.6 and future_pv < future_load * 0.8 and batt_room > 0.5 * batt_cap:
-            grid_to_batt_frac = 0.5  # opportunistic charging
+            grid_to_batt_frac = 0.5
 
-    action = np.array([
-        pv_to_house_frac,
-        pv_to_batt_frac,
-        batt_to_house_frac,
-        grid_to_batt_frac
-    ], dtype=np.float32)
-
+    action = np.array([pv_to_house_frac, pv_to_batt_frac, batt_to_house_frac, grid_to_batt_frac], dtype=np.float32)
     obs, reward, terminated, truncated, info = env_forecast_rule.step(action)
     rewards_forecast_rule.append(reward)
-    if terminated:
-        break
-
+    done = terminated
 
 # --- Compute cumulative rewards ---
 cumulative_agent = np.cumsum(rewards_agent)
