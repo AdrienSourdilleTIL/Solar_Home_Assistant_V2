@@ -87,6 +87,9 @@ class SolarBatteryEnv(gym.Env):
         # action[2]: fraction of battery discharge sent to house (0–1)
         # (remainder goes to grid)
         # action[3]: fraction of grid energy used to charge battery (0–1)
+<<<<<<< HEAD
+>>>>>>> parent of be37ea7 (physical flow fix)
+=======
 >>>>>>> parent of be37ea7 (physical flow fix)
         self.action_space = spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32)
 
@@ -108,6 +111,10 @@ class SolarBatteryEnv(gym.Env):
         row = self.data.iloc[self.idx]
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+        # Current energy context
+>>>>>>> parent of be37ea7 (physical flow fix)
 =======
         # Current energy context
 >>>>>>> parent of be37ea7 (physical flow fix)
@@ -117,7 +124,11 @@ class SolarBatteryEnv(gym.Env):
         price_sell = row["sell_price"] # price for exporting to grid
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         # Clip and normalize actions
+=======
+        # Parse and clip actions
+>>>>>>> parent of be37ea7 (physical flow fix)
 =======
         # Parse and clip actions
 >>>>>>> parent of be37ea7 (physical flow fix)
@@ -127,6 +138,7 @@ class SolarBatteryEnv(gym.Env):
         grid_to_batt_frac = float(np.clip(action[3], 0, 1))
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         pv_frac_total = pv_to_house_frac + pv_to_batt_frac
         if pv_frac_total > 1.0:
             pv_to_house_frac /= pv_frac_total
@@ -134,6 +146,8 @@ class SolarBatteryEnv(gym.Env):
         pv_to_grid_frac = 1.0 - pv_to_house_frac - pv_to_batt_frac
 
 =======
+=======
+>>>>>>> parent of be37ea7 (physical flow fix)
         # --- PV allocation ---
 >>>>>>> parent of be37ea7 (physical flow fix)
         pv_to_house = pv * pv_to_house_frac
@@ -141,7 +155,12 @@ class SolarBatteryEnv(gym.Env):
         pv_to_grid = max(pv - pv_to_house - pv_to_batt, 0)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         batt_discharge_power = self.max_charge_rate
+=======
+        # --- Battery discharge ---
+        batt_discharge_power = self.max_charge_rate  # max discharge capacity
+>>>>>>> parent of be37ea7 (physical flow fix)
 =======
         # --- Battery discharge ---
         batt_discharge_power = self.max_charge_rate  # max discharge capacity
@@ -157,6 +176,10 @@ class SolarBatteryEnv(gym.Env):
             battery_used = available_energy
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+        # --- Grid and battery charging ---
+>>>>>>> parent of be37ea7 (physical flow fix)
 =======
         # --- Grid and battery charging ---
 >>>>>>> parent of be37ea7 (physical flow fix)
@@ -166,9 +189,17 @@ class SolarBatteryEnv(gym.Env):
             grid_to_batt = min(grid_to_batt, (self.battery_capacity - self.soc))
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         batt_charge_energy = (pv_to_batt + grid_to_batt) * self.eta
         self.soc = np.clip(self.soc + batt_charge_energy - battery_used, 0, self.battery_capacity)
 
+=======
+        # Effective battery charging
+        batt_charge_energy = (pv_to_batt + grid_to_batt) * self.eta
+        self.soc = np.clip(self.soc + batt_charge_energy - battery_used, 0, self.battery_capacity)
+
+        # --- Energy to meet house demand ---
+>>>>>>> parent of be37ea7 (physical flow fix)
 =======
         # Effective battery charging
         batt_charge_energy = (pv_to_batt + grid_to_batt) * self.eta
@@ -205,6 +236,10 @@ class SolarBatteryEnv(gym.Env):
         )
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+        # Advance time
+>>>>>>> parent of be37ea7 (physical flow fix)
 =======
         # Advance time
 >>>>>>> parent of be37ea7 (physical flow fix)

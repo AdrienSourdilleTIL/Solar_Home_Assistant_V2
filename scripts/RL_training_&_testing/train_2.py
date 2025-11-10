@@ -61,7 +61,7 @@ model = SAC(
 )
 
 # --- Train agent ---
-model.learn(total_timesteps=100_000)  # longer training for weekly episodes
+model.learn(total_timesteps=200_000)  # longer training for weekly episodes
 
 # --- Save trained model ---
 model.save("./solar_batt_agent_weekly")
