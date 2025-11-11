@@ -22,38 +22,41 @@ while True:
     action, _ = model.predict(obs, deterministic=True)
     obs, reward, terminated, truncated, info = env.step(action)
     
+    # Use info from env to avoid 1-hour offset
     row = {
-        "datetime": test_df.iloc[env.idx]["datetime"],  # current timestep
+        "datetime": info["datetime"],  # current timestep from environment
+
         # Action fractions
         "pv_to_house_frac": float(action[0]),
         "pv_to_batt_frac": float(action[1]),
         "batt_to_house_frac": float(action[2]),
         "grid_to_batt_frac": float(action[3]),
-        
+
         # Battery state
         "soc_kWh": info["soc_kWh"],
-        
+
         # House energy components
         "pv_to_house_kWh": info["pv_to_house_kWh"],
         "discharge_to_house_kWh": info["discharge_to_house_kWh"],
         "grid_to_house_kWh": info["grid_to_house_kWh"],
-        
+
         # Battery energy components
         "pv_to_batt_kWh": info["pv_to_batt_kWh"],
         "grid_to_batt_kWh": info["grid_to_batt_kWh"],
-        
+
         # Grid energy components
         "pv_to_grid_kWh": info["pv_to_grid_kWh"],
         "discharge_to_grid_kWh": info["discharge_to_grid_kWh"],
-        
-        # Original consumption and production
-        "consumption_kWh": test_df.iloc[env.idx]["consumption_kWh"],
-        "pv_production_kWh": max(test_df.iloc[env.idx]["P"], 0.0),
-        
+
+        # Original consumption and PV production
+        "consumption_kWh": test_df.loc[test_df["datetime"] == info["datetime"], "consumption_kWh"].values[0],
+        "pv_production_kWh": max(test_df.loc[test_df["datetime"] == info["datetime"], "P"].values[0], 0.0),
+
         # Cost
         "step_cost_eur": info["cost_eur"],
         "degradation_penalty": info["degradation_penalty"]
     }
+
     records.append(row)
     
     if terminated:

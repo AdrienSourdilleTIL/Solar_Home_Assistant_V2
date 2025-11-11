@@ -5,12 +5,12 @@ from gymnasium import spaces
 
 class SolarBatteryEnv(gym.Env):
     """
-    Solar-battery-grid environment where the agent decides how to allocate energy flows.
+    Solar-battery-grid environment where the agent decides energy flows.
     The agent decides:
-        - how much PV goes to battery vs grid vs house
-        - how much battery discharges to house vs grid
-        - how much to import from grid to charge the battery
-    The environment ensures home consumption is always met (grid compensates deficits).
+        - PV allocation: house, battery, grid
+        - Battery discharge: house, grid
+        - Grid-to-battery charging
+    The environment ensures home consumption is always met.
     """
 
     metadata = {"render_modes": ["human"]}
@@ -33,19 +33,18 @@ class SolarBatteryEnv(gym.Env):
         self.idx = 0
         self.soc = 0.5 * battery_capacity
 
-        # --- Determine observation columns dynamically ---
+        # Determine observation columns dynamically
         self.state_cols = self._get_state_cols()
         self.norm_factors = {col: self.data[col].abs().max() + 1e-8 for col in self.state_cols}
         self.norm_factors["soc"] = battery_capacity
 
-        obs_dim = len(self.state_cols) + 1  # SOC included
+        obs_dim = len(self.state_cols) + 1  # include SOC
         self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
 
-        # Action space: 4 continuous actions between 0 and 1
+        # 4 continuous actions: PV→house, PV→battery, battery→house, grid→battery
         self.action_space = spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32)
 
     def _get_state_cols(self):
-        """Return the list of columns used as state features, ignoring redundant ones."""
         ignore_cols = ["Gb", "Gd", "Gr"]
         base_cols = [c for c in self.data.columns if c not in ignore_cols]
 
@@ -56,18 +55,12 @@ class SolarBatteryEnv(gym.Env):
         numeric_cols = [c for c in base_cols if np.issubdtype(self.data[c].dtype, np.number)
                         and c not in forecast_cols + lag_cols + cyclical_cols + binary_cols]
 
-        # Final ordered list of columns
-        state_cols = numeric_cols + cyclical_cols + binary_cols + forecast_cols + lag_cols
-        return state_cols
+        return numeric_cols + cyclical_cols + binary_cols + forecast_cols + lag_cols
 
     def _get_obs(self):
         row = self.data.iloc[self.idx]
-        obs_values = []
-        for col in self.state_cols:
-            if np.issubdtype(self.data[col].dtype, np.number):
-                obs_values.append(row[col] / self.norm_factors[col])
-            else:
-                obs_values.append(0.0)  # non-numeric fallback
+        obs_values = [row[col] / self.norm_factors[col] if np.issubdtype(self.data[col].dtype, np.number) else 0.0
+                      for col in self.state_cols]
         obs_values.append(self.soc / self.norm_factors["soc"])
         return np.array(obs_values, dtype=np.float32)
 
@@ -123,6 +116,7 @@ class SolarBatteryEnv(gym.Env):
         reward = -(gross_cost + degradation_penalty)
 
         info = dict(
+            datetime=row["datetime"],  # Include datetime to fix the KeyError
             step=self.idx,
             soc_kWh=self.soc,
             soc_ratio=self.soc / self.battery_capacity,
