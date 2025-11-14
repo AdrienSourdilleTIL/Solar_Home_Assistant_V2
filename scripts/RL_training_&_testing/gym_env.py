@@ -5,12 +5,12 @@ from gymnasium import spaces
 
 class SolarBatteryEnv(gym.Env):
     """
-    Solar-battery-grid environment where the agent decides energy flows.
+    Solar-battery-grid environment.
     The agent decides:
         - PV allocation: house, battery, grid
         - Battery discharge: house, grid
         - Grid-to-battery charging
-    The environment ensures home consumption is always met.
+    The environment ensures home consumption is always met and prevents battery overflow.
     """
 
     metadata = {"render_modes": ["human"]}
@@ -27,23 +27,24 @@ class SolarBatteryEnv(gym.Env):
         self.battery_capacity = battery_capacity
         self.max_charge_rate = max_charge_rate
         self.timestep_h = timestep_h
-        self.eta = eta
+        self.eta = eta  # charging efficiency
         self.degradation_cost = degradation_cost
 
         self.idx = 0
-        self.soc = 0.5 * battery_capacity
+        self.soc = 0.5 * battery_capacity  # initial SOC
 
         # Determine observation columns dynamically
         self.state_cols = self._get_state_cols()
         self.norm_factors = {col: self.data[col].abs().max() + 1e-8 for col in self.state_cols}
         self.norm_factors["soc"] = battery_capacity
 
-        obs_dim = len(self.state_cols) + 1  # include SOC
+        obs_dim = len(self.state_cols) + 1  # SOC included
         self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
+        self.action_space = spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32)  # 4 continuous actions
 
-        # 4 continuous actions: PV→house, PV→battery, battery→house, grid→battery
-        self.action_space = spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32)
-
+    # ----------------------
+    # Helper: state columns
+    # ----------------------
     def _get_state_cols(self):
         ignore_cols = ["Gb", "Gd", "Gr"]
         base_cols = [c for c in self.data.columns if c not in ignore_cols]
@@ -57,13 +58,21 @@ class SolarBatteryEnv(gym.Env):
 
         return numeric_cols + cyclical_cols + binary_cols + forecast_cols + lag_cols
 
+    # ----------------------
+    # Observation builder
+    # ----------------------
     def _get_obs(self):
         row = self.data.iloc[self.idx]
-        obs_values = [row[col] / self.norm_factors[col] if np.issubdtype(self.data[col].dtype, np.number) else 0.0
-                      for col in self.state_cols]
+        obs_values = [
+            row[col] / self.norm_factors[col] if np.issubdtype(self.data[col].dtype, np.number) else 0.0
+            for col in self.state_cols
+        ]
         obs_values.append(self.soc / self.norm_factors["soc"])
         return np.array(obs_values, dtype=np.float32)
 
+    # ----------------------
+    # Step logic
+    # ----------------------
     def step(self, action):
         row = self.data.iloc[self.idx]
 
@@ -72,7 +81,7 @@ class SolarBatteryEnv(gym.Env):
         price_buy = row["buy_price"]
         price_sell = row["sell_price"]
 
-        # Clip actions
+        # Clip and unpack actions
         pv_to_house_frac = float(np.clip(action[0], 0, 1))
         pv_to_batt_frac = float(np.clip(action[1], 0, 1))
         batt_to_house_frac = float(np.clip(action[2], 0, 1))
@@ -81,7 +90,13 @@ class SolarBatteryEnv(gym.Env):
         # PV allocation
         pv_to_house = pv * pv_to_house_frac
         pv_to_batt = pv * pv_to_batt_frac
-        pv_to_grid = max(pv - pv_to_house - pv_to_batt, 0.0)
+        pv_remaining = pv - pv_to_house
+
+        # --- Handle battery overflow ---
+        max_batt_charge = self.battery_capacity - self.soc
+        pv_to_batt_actual = min(pv_to_batt * self.eta, max_batt_charge)
+        pv_overflow = max(0, (pv_to_batt * self.eta) - max_batt_charge)
+        pv_to_grid = max(pv_remaining - pv_to_batt_actual - pv_overflow, 0.0) + pv_overflow
 
         # Battery discharge
         batt_discharge_power = self.max_charge_rate
@@ -90,8 +105,8 @@ class SolarBatteryEnv(gym.Env):
         battery_used = 0.0
         if self.soc > 0.1 * self.battery_capacity:
             available_energy = min(self.soc, batt_discharge_power * self.timestep_h)
-            discharge_to_house = available_energy * batt_to_house_frac * self.eta
-            discharge_to_grid = available_energy * (1 - batt_to_house_frac) * self.eta
+            discharge_to_house = available_energy * batt_to_house_frac
+            discharge_to_grid = available_energy * (1 - batt_to_house_frac)
             battery_used = available_energy
 
         # Grid charging
@@ -100,7 +115,8 @@ class SolarBatteryEnv(gym.Env):
             grid_to_batt = min(self.max_charge_rate * grid_to_batt_frac * self.timestep_h,
                                self.battery_capacity - self.soc)
 
-        batt_charge_energy = (pv_to_batt + grid_to_batt) * self.eta
+        # Update SOC with charging efficiency
+        batt_charge_energy = pv_to_batt_actual + grid_to_batt * self.eta
         self.soc = np.clip(self.soc + batt_charge_energy - battery_used, 0, self.battery_capacity)
 
         # House demand
@@ -108,20 +124,23 @@ class SolarBatteryEnv(gym.Env):
         energy_deficit = max(consumption - energy_supplied, 0)
         grid_to_house = energy_deficit
 
+        # Grid flows
         energy_from_grid = grid_to_house + grid_to_batt
         energy_to_grid = pv_to_grid + discharge_to_grid
 
+        # Cost and reward
         gross_cost = energy_from_grid * price_buy - energy_to_grid * price_sell
         degradation_penalty = self.degradation_cost * (batt_charge_energy + battery_used)
         reward = -(gross_cost + degradation_penalty)
 
+        # Info dictionary
         info = dict(
-            datetime=row["datetime"],  # Include datetime to fix the KeyError
+            datetime=row["datetime"],
             step=self.idx,
             soc_kWh=self.soc,
             soc_ratio=self.soc / self.battery_capacity,
             pv_to_house_kWh=pv_to_house,
-            pv_to_batt_kWh=pv_to_batt,
+            pv_to_batt_kWh=pv_to_batt_actual,
             pv_to_grid_kWh=pv_to_grid,
             discharge_to_house_kWh=discharge_to_house,
             discharge_to_grid_kWh=discharge_to_grid,
@@ -133,16 +152,24 @@ class SolarBatteryEnv(gym.Env):
             degradation_penalty=degradation_penalty
         )
 
+        # Advance timestep
         self.idx += 1
         terminated = self.idx >= len(self.data) - 1
         truncated = False
+
         return self._get_obs(), reward, terminated, truncated, info
 
+    # ----------------------
+    # Reset
+    # ----------------------
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         self.idx = 0
         self.soc = 0.5 * self.battery_capacity
         return self._get_obs(), {}
 
+    # ----------------------
+    # Render
+    # ----------------------
     def render(self):
         print(f"Step {self.idx}: SOC={self.soc:.2f} kWh")
