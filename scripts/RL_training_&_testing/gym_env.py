@@ -35,12 +35,28 @@ class SolarBatteryEnv(gym.Env):
 
         # Determine observation columns dynamically
         self.state_cols = self._get_state_cols()
-        self.norm_factors = {col: self.data[col].abs().max() + 1e-8 for col in self.state_cols}
+
+        # Compute normalization factors
+        # CRITICAL FIX: Do NOT normalize prices - they're already in reasonable range
+        # and we want agent to see raw economic values directly
+        self.norm_factors = {}
+        for col in self.state_cols:
+            if col in ['buy_price', 'sell_price']:
+                # Don't normalize prices - use raw values (0.04-0.21 EUR/kWh range)
+                self.norm_factors[col] = 1.0
+            else:
+                # All other features: normalize independently
+                self.norm_factors[col] = self.data[col].abs().max() + 1e-8
+
         self.norm_factors["soc"] = battery_capacity
 
         obs_dim = len(self.state_cols) + 1  # SOC included
-        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
-        self.action_space = spaces.Box(low=0.0, high=1.0, shape=(4,), dtype=np.float32)  # 4 continuous actions
+        # Observation space: prices not normalized, so bounds are -inf to +inf
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+        # Action space: 4 continuous actions
+        # action[0:3] = PV allocation logits (will be softmaxed to sum to 1.0)
+        # action[3] = battery discharge to house fraction (0-1)
+        self.action_space = spaces.Box(low=-10.0, high=10.0, shape=(4,), dtype=np.float32)
 
     # ----------------------
     # Helper: state columns
@@ -81,22 +97,33 @@ class SolarBatteryEnv(gym.Env):
         price_buy = row["buy_price"]
         price_sell = row["sell_price"]
 
-        # Clip and unpack actions
-        pv_to_house_frac = float(np.clip(action[0], 0, 1))
-        pv_to_batt_frac = float(np.clip(action[1], 0, 1))
-        batt_to_house_frac = float(np.clip(action[2], 0, 1))
-        grid_to_batt_frac = float(np.clip(action[3], 0, 1))
+        # ACTION SPACE REDESIGN:
+        # action[0:3] = PV allocation logits [house, batt, grid]
+        # action[3] = battery discharge to house fraction
 
-        # PV allocation
+        # Apply softmax to PV allocation logits to get mutually exclusive fractions
+        pv_logits = action[0:3]
+        pv_exp = np.exp(pv_logits - np.max(pv_logits))  # numerical stability
+        pv_fracs = pv_exp / np.sum(pv_exp)  # softmax
+
+        pv_to_house_frac = float(pv_fracs[0])
+        pv_to_batt_frac = float(pv_fracs[1])
+        pv_to_grid_frac = float(pv_fracs[2])  # Agent now explicitly controls selling!
+
+        batt_to_house_frac = float(np.clip(action[3], 0, 1))
+
+        # PV allocation (fractions now sum to 1.0 by construction)
         pv_to_house = pv * pv_to_house_frac
-        pv_to_batt = pv * pv_to_batt_frac
-        pv_remaining = pv - pv_to_house
+        pv_to_batt_intended = pv * pv_to_batt_frac
+        pv_to_grid_intended = pv * pv_to_grid_frac
 
-        # --- Handle battery overflow ---
+        # Handle battery overflow (if battery is full, excess goes to grid)
         max_batt_charge = self.battery_capacity - self.soc
-        pv_to_batt_actual = min(pv_to_batt * self.eta, max_batt_charge)
-        pv_overflow = max(0, (pv_to_batt * self.eta) - max_batt_charge)
-        pv_to_grid = max(pv_remaining - pv_to_batt_actual - pv_overflow, 0.0) + pv_overflow
+        pv_to_batt_actual = min(pv_to_batt_intended * self.eta, max_batt_charge)
+        pv_batt_overflow = max(0, (pv_to_batt_intended * self.eta) - max_batt_charge)
+
+        # Final grid sale includes intended + overflow from full battery
+        pv_to_grid = pv_to_grid_intended + pv_batt_overflow
 
         # Battery discharge
         batt_discharge_power = self.max_charge_rate
@@ -109,14 +136,11 @@ class SolarBatteryEnv(gym.Env):
             discharge_to_grid = available_energy * (1 - batt_to_house_frac)
             battery_used = available_energy
 
-        # Grid charging
+        # Grid charging removed - agent should not charge battery from expensive grid
         grid_to_batt = 0.0
-        if self.soc < self.battery_capacity:
-            grid_to_batt = min(self.max_charge_rate * grid_to_batt_frac * self.timestep_h,
-                               self.battery_capacity - self.soc)
 
         # Update SOC with charging efficiency
-        batt_charge_energy = pv_to_batt_actual + grid_to_batt * self.eta
+        batt_charge_energy = pv_to_batt_actual
         self.soc = np.clip(self.soc + batt_charge_energy - battery_used, 0, self.battery_capacity)
 
         # House demand

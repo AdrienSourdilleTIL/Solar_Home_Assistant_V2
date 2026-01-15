@@ -77,11 +77,11 @@ model = SAC(
     verbose=1,
     batch_size=128,
     learning_rate=3e-4,
-    gamma=0.99,
+    gamma=0.999,  # Increased from 0.99 to better value delayed rewards
     tensorboard_log="./solar_batt_tensorboard/"
 )
 
 # --- Train the agent ---
 model.learn(total_timesteps=200000)
 model.save("./solar_batt_agent_weekly_lagged")
-print("✅ Training complete and model saved!")
+print("Training complete and model saved!")
