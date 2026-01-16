@@ -1,105 +1,143 @@
-# Solar Battery Reinforcement Learning Agent
+# Solar Battery Management: RL vs Rule-Based
 
-## Overview
+Reinforcement learning agent for home solar battery management, trained using Soft Actor-Critic (SAC).
 
-Imagine you've just installed solar panels and a home battery. Your goal is simple: **use your solar energy efficiently**, reduce electricity bills, and perhaps even sell excess energy back to the grid. But making smart decisions about **when to charge, discharge, buy, or sell electricity** is tricky — consumption fluctuates hourly, PV production is variable, and electricity prices can change as well.
+## Problem
 
-In France, the situation has changed:
+Manage a home solar + battery system to minimize electricity costs. In France, the economics changed dramatically:
 
-- **Before 2025:** households could sign fixed-price contracts to sell their PV electricity for up to **35 cents/kWh**, often more than the grid purchase price. Selling everything was highly incentivized.
-- **Now:** selling prices dropped to around **4 cents/kWh**, while purchasing electricity from the grid got more expensive. This makes **self-consumption and smart battery management more important than ever**, requiring strategies that consider forecasts, consumption patterns, and battery state.
+- **Before 2025:** Selling PV to grid at €0.35/kWh made selling everything optimal
+- **Now:** Selling at €0.04/kWh while buying at €0.19/kWh makes self-consumption critical
 
-A **reinforcement learning (RL) agent** can manage these decisions dynamically, learning optimal battery management strategies.
+The question: Can RL learn better battery management than simple rules?
 
 ## Results
 
-**Latest V2 Agent (Simplified Environment):**
-- **Annual cost: €205** (62% reduction from baseline)
-- Grid purchases: 1,782 kWh (53% reduction)
-- Battery utilization: 64% average SOC (10x improvement)
-- Strategic selling: 48% of PV sold to grid (down from 65%)
-- **Energy balance: 100% accurate** (no wasted energy)
+Comparison of V2 RL agent vs simple rule-based policy on 2023 test data (8,760 hours):
 
-The V2 agent achieved these results through a simplified action space that respects physical constraints and energy conservation, making decisions that align with how real home energy systems work.
+| Method | Annual Cost | Grid Purchases | Battery Usage |
+|--------|-------------|----------------|---------------|
+| **Rule-Based** | **€152** | 1,660 kWh | 51% avg SOC |
+| RL Agent (SAC) | €199 | 1,782 kWh | 64% avg SOC |
 
----
+**Winner: Rule-Based Policy** (saves €47/year, 24% lower cost)
 
-## How It Works
+### The Simple Rules That Work
 
-The environment simulates a **single household with solar panels and a battery**, with hourly timesteps. Observations include:
+```python
+# When PV > consumption (surplus):
+charge_battery = 1.0 if battery_soc < 80% else 0.0
 
-- **PV production** (`P`) and **household consumption** (`consumption_kWh`)  
-- **Battery state-of-charge (SOC)**  
-- **Environmental variables:** temperature, pressure, solar irradiance, wind speed  
-- **Energy prices:** `buy_price` and `sell_price`  
-- **Forecasts:** PV and load for up to 12 hours ahead  
+# When consumption > PV (deficit):
+use_battery = 1.0 if battery_soc > 30% else 0.0
+```
 
-At each timestep, the V2 agent makes **2 key decisions**:
+This simple threshold-based approach outperforms the learned RL policy.
 
-1. **charge_battery_fraction** [0-1]: When surplus PV is available (after meeting house demand), what fraction should be stored in the battery vs sold to grid?
+## Why RL Doesn't Excel Here
 
-2. **use_battery_fraction** [0-1]: When more energy is needed (consumption exceeds PV), what fraction should come from battery vs grid?
+The problem is **too simple** for RL to show advantages:
 
-The environment automatically:
-- Uses PV to meet house demand first (always optimal)
-- Allocates surplus PV per agent's decision
-- Sources deficit energy per agent's decision
-- **Guarantees energy conservation** (no wasted energy)  
+- **Static pricing:** Buy and sell prices don't vary by time of day, eliminating arbitrage opportunities
+- **Trivial optimal strategy:** Simple thresholds capture the essential logic
+- **No complex timing decisions:** When prices are constant, temporal optimization provides no benefit
+- **No controllable loads:** Agent can't shift consumption to cheaper times
 
----
+For RL to excel, you need:
+- **Dynamic pricing** (time-of-use tariffs, spot market)
+- **Controllable loads** (EV charging, water heater, HVAC)
+- **Multiple conflicting objectives** (comfort vs cost, grid stability)
+- **Uncertain forecasts** where learned adaptation matters
 
-## Reward Function
+## Environment
 
-The agent is trained to **minimize total household energy costs** while accounting for battery degradation.  
+The V2 environment uses a simplified action space that respects physical constraints:
 
-The reward considers:
+**Actions (2D continuous):**
+- `charge_battery_fraction` [0-1]: When surplus PV available, how much to store vs sell
+- `use_battery_fraction` [0-1]: When deficit occurs, how much from battery vs grid
 
-- **Gross cost:** net expense of buying electricity minus revenue from selling PV  
-- **Degradation penalty:** small cost for charging/discharging the battery to reflect wear  
-- **Objective:** minimize total costs, encouraging **self-consumption, battery usage, and selective selling**  
+**Observations:**
+- PV production and household consumption
+- Battery state-of-charge (SOC)
+- Energy prices (buy/sell)
+- Lagged features (3 timesteps of P, consumption, prices)
+- Cyclical time encodings (hour, day of week)
 
-This is critical given the current low selling prices in France.
+**Physical Logic:**
+1. Use PV to meet house demand first (automatic, always optimal)
+2. If surplus: allocate between battery and grid per agent decision
+3. If deficit: source from battery and grid per agent decision
 
----
+**Constraints:**
+- Battery: 10 kWh capacity, 5 kW max charge rate, 95% efficiency
+- Energy balance: 100% conservation guaranteed (no wasted energy)
 
-## Rule-Based Policies for Comparison
+## Training
 
-To benchmark performance, we implemented two rule-based strategies:
+**Algorithm:** Soft Actor-Critic (SAC)
+- Off-policy RL for continuous control
+- Entropy regularization for exploration
 
-1. **Simple Rule-Based Policy**  
-   - Uses PV for household consumption first  
-   - Charges the battery if there’s excess PV  
-   - Discharges the battery when PV is insufficient  
-   - Falls back to the grid if the battery is empty  
+**Data:**
+- Training: 2015-2022 (6 years of hourly data)
+- Testing: 2023 (1 year)
 
-2. **Forecast-Aware / Context-Aware Rule-Based Policy**  
-   - Uses up to **12-hour forecasts** of PV and load  
-   - Adjusts battery reserves based on expected PV and time of day  
-   - Considers electricity prices for buying and selling  
+**Reward:** Minimize `-(electricity_cost + degradation_penalty)`
 
-Even with forecasts and smarter rules, the RL agent **consistently outperforms both**, learning **complex strategies that balance immediate and future costs**.
+## Repository Structure
 
----
+```
+scripts/RL_training_&_testing/
+├── gym_env_v2.py                  # V2 simplified environment
+├── train_v2.py                    # Train SAC agent
+├── evaluate_v2.py                 # Evaluate on test set
+├── compare_agent_vs_rules.py      # Compare RL vs rule-based
+└── solar_batt_agent_v2.zip        # Trained model
 
-## Training the Agent
+data/main/processed/
+├── train.csv                      # 2015-2022 training data
+├── validation.csv                 # Validation split
+└── test.csv                       # 2023 test data
 
-The agent was trained using **Soft Actor-Critic (SAC)**, a state-of-the-art **off-policy RL algorithm** ideal for **continuous control problems** like battery management:
+outputs/
+└── agent_step_data_v2.csv         # Detailed evaluation results
+```
 
-- **Why SAC:**  
-  - Handles **continuous action spaces** naturally (charging/discharging rates)  
-  - Balances **exploration and exploitation** using entropy regularization  
-  - Stable and **sample-efficient**, suitable for long historical energy datasets  
+## Usage
 
-- **Training data:** 2015–2022 (~6 years of hourly data)  
-- **Testing data:** 2023 (1 year)  
-- **Observations included:**  
-  - Environmental variables (temperature, pressure, solar irradiance, wind)  
-  - PV production and household load  
-  - PV and load forecasts for up to 12 hours  
-  - Energy prices (`buy_price`, `sell_price`)  
+**Train agent:**
+```bash
+cd scripts/RL_training_&_testing
+python train_v2.py
+```
 
-- **Objective:** maximize cumulative reward, i.e., **minimize total costs including battery degradation**  
+**Evaluate agent:**
+```bash
+python evaluate_v2.py
+```
 
-By training on several years of realistic data, the agent learned **how consumption patterns, PV variability, and price changes interact**, enabling context-aware decisions that fixed rule-based policies cannot replicate.
+**Compare RL vs rule-based:**
+```bash
+python compare_agent_vs_rules.py
+```
 
----
+## Lessons Learned
+
+1. **Simple problems don't need RL:** When optimal strategy can be captured by thresholds, RL adds complexity without benefit
+2. **Baseline comparison is critical:** Always compare against sensible heuristics before claiming RL success
+3. **Problem complexity matters:** RL shines when there are complex temporal dependencies, multiple objectives, or uncertain dynamics
+4. **Static pricing kills RL advantage:** Without time-varying prices, there's no arbitrage opportunity to learn
+
+For this specific problem with static French residential tariffs, **simple rules win**.
+
+## Future Work
+
+To make RL valuable here, consider:
+- **Dynamic pricing** (Tempo tariff, spot market)
+- **Controllable loads** (EV, water heater scheduling)
+- **Multiple batteries** or shared community storage
+- **Grid services** (frequency regulation, demand response)
+- **Forecast uncertainty** modeling for robust decisions
+
+With these additions, the problem becomes complex enough for RL to demonstrate value over simple rules.
