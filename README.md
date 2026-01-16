@@ -130,13 +130,6 @@ python compare_agent_vs_rules.py
 4. **Static pricing kills RL advantage:** Without time-varying prices, there's no arbitrage opportunity to learn
 
 For this specific problem with static French residential tariffs, **simple rules win**.
-
-## Future Work
-
-To make RL valuable here, consider:
-- **Dynamic pricing** (Tempo tariff, spot market)
-- **Controllable loads** (EV, water heater scheduling)
-- **Multiple batteries** or shared community storage
 - **Grid services** (frequency regulation, demand response)
 - **Forecast uncertainty** modeling for robust decisions
 
