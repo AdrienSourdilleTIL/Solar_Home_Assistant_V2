@@ -37,13 +37,20 @@ class SolarBatteryEnv(gym.Env):
         self.state_cols = self._get_state_cols()
 
         # Compute normalization factors
-        # CRITICAL FIX: Do NOT normalize prices - they're already in reasonable range
-        # and we want agent to see raw economic values directly
+        # FIX #3: Normalize buy_price and sell_price by SAME factor to preserve ratio
+        # This is critical - agent must see that sell_price (€0.04) is ~21% of buy_price (€0.19)
         self.norm_factors = {}
+        max_buy_price = None
+
         for col in self.state_cols:
-            if col in ['buy_price', 'sell_price']:
-                # Don't normalize prices - use raw values (0.04-0.21 EUR/kWh range)
-                self.norm_factors[col] = 1.0
+            if col == 'buy_price':
+                max_buy_price = self.data[col].abs().max() + 1e-8
+                self.norm_factors[col] = max_buy_price
+            elif col == 'sell_price':
+                # Use same normalization factor as buy_price to preserve economic relationship
+                if max_buy_price is None:
+                    max_buy_price = self.data['buy_price'].abs().max() + 1e-8
+                self.norm_factors[col] = max_buy_price  # Same factor!
             else:
                 # All other features: normalize independently
                 self.norm_factors[col] = self.data[col].abs().max() + 1e-8
@@ -51,8 +58,8 @@ class SolarBatteryEnv(gym.Env):
         self.norm_factors["soc"] = battery_capacity
 
         obs_dim = len(self.state_cols) + 1  # SOC included
-        # Observation space: prices not normalized, so bounds are -inf to +inf
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+        # Observation space: normalized prices in ~0-1 range, other features also normalized
+        self.observation_space = spaces.Box(low=-5.0, high=5.0, shape=(obs_dim,), dtype=np.float32)
         # Action space: 4 continuous actions
         # action[0:3] = PV allocation logits (will be softmaxed to sum to 1.0)
         # action[3] = battery discharge to house fraction (0-1)
@@ -113,17 +120,25 @@ class SolarBatteryEnv(gym.Env):
         batt_to_house_frac = float(np.clip(action[3], 0, 1))
 
         # PV allocation (fractions now sum to 1.0 by construction)
-        pv_to_house = pv * pv_to_house_frac
+        pv_to_house_intended = pv * pv_to_house_frac
         pv_to_batt_intended = pv * pv_to_batt_frac
         pv_to_grid_intended = pv * pv_to_grid_frac
+
+        # CRITICAL FIX: Handle excess PV to house (can't use more than consumption)
+        # Any excess gets redirected to grid (can't be wasted)
+        pv_to_house_actual = min(pv_to_house_intended, consumption)
+        pv_house_overflow = max(0, pv_to_house_intended - consumption)
 
         # Handle battery overflow (if battery is full, excess goes to grid)
         max_batt_charge = self.battery_capacity - self.soc
         pv_to_batt_actual = min(pv_to_batt_intended * self.eta, max_batt_charge)
         pv_batt_overflow = max(0, (pv_to_batt_intended * self.eta) - max_batt_charge)
 
-        # Final grid sale includes intended + overflow from full battery
-        pv_to_grid = pv_to_grid_intended + pv_batt_overflow
+        # Final grid sale includes intended + overflow from full battery + overflow from house
+        pv_to_grid = pv_to_grid_intended + pv_batt_overflow + pv_house_overflow
+
+        # Use actual PV to house (not intended)
+        pv_to_house = pv_to_house_actual
 
         # Battery discharge
         batt_discharge_power = self.max_charge_rate
@@ -152,10 +167,30 @@ class SolarBatteryEnv(gym.Env):
         energy_from_grid = grid_to_house + grid_to_batt
         energy_to_grid = pv_to_grid + discharge_to_grid
 
-        # Cost and reward
+        # Cost and reward (FIX #3: Add moderate reward shaping)
         gross_cost = energy_from_grid * price_buy - energy_to_grid * price_sell
         degradation_penalty = self.degradation_cost * (batt_charge_energy + battery_used)
-        reward = -(gross_cost + degradation_penalty)
+        base_reward = -(gross_cost + degradation_penalty)
+
+        # Reward Shaping #1: Opportunity cost penalty
+        # This makes the immediate cost of selling more apparent to the agent
+        # When selling 1 kWh at €0.04 when buy price is €0.19, the opportunity cost is €0.15
+        # This represents the "forgone savings" from not storing for later use
+        opportunity_cost = energy_to_grid * (price_buy - price_sell)
+
+        # Reward Shaping #2: SOC management incentive
+        # Encourage maintaining 40-70% SOC to keep battery ready for peak hours
+        soc_ratio = self.soc / self.battery_capacity
+        soc_penalty = 0.0
+        if soc_ratio < 0.4:
+            # Penalty for low SOC (battery not ready for evening peak)
+            soc_penalty = 0.02 * (0.4 - soc_ratio)
+        elif soc_ratio > 0.7:
+            # Small penalty for too high SOC (lost charging opportunity)
+            soc_penalty = 0.01 * (soc_ratio - 0.7)
+
+        # Final shaped reward (moderate weights: 0.5 for opportunity cost)
+        reward = base_reward - 0.5 * opportunity_cost - soc_penalty
 
         # Info dictionary
         info = dict(

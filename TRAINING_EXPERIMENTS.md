@@ -7,12 +7,13 @@
 
 ## Executive Summary
 
-Conducted three training experiments to fix identified bugs in the RL agent:
+Conducted multiple training experiments to fix identified bugs in the RL agent:
 1. **Original Agent** (with bugs): €591/year
-2. **Fix #1** (normalized prices by same factor + gamma=0.999): **€512/year** ✓ **Best**
-3. **Fix #2** (no price normalization + softmax actions): €623/year ✗ Worse
+2. **Fix #1** (normalized prices by same factor + gamma=0.999): €512/year (13.4% improvement)
+3. **Fix #2** (no price normalization + softmax actions): €623/year (5.5% WORSE)
+4. **Fix #3** (Fix #1 normalization + Fix #2 softmax + reward shaping): **TRAINING IN PROGRESS**
 
-**Winner: Fix #1** achieved **€79 savings (13.4% improvement)** over original agent.
+**Current Status**: Implementing Fix #3 to combine best elements and break "selling is safe" local minimum.
 
 ---
 
@@ -120,6 +121,71 @@ norm_factors['sell_price'] = 0.04   # sell_price / 0.04 = 1.0
 2. **Neural network struggled** to learn price sensitivity without normalization
 3. **Agent barely used battery** (5% SOC vs 9% in Fix #1)
 4. **Bought more from expensive grid** despite selling less
+
+---
+
+## Fix #3: Comprehensive Solution (CURRENT)
+
+### Changes Made
+
+1. **Price Normalization** (from Fix #1)
+   ```python
+   # Both prices normalized by SAME factor (max buy price)
+   max_buy_price = 0.21
+   norm_factors['buy_price'] = max_buy_price
+   norm_factors['sell_price'] = max_buy_price  # Preserves ratio!
+   ```
+
+2. **Softmax Action Space** (from Fix #2)
+   ```python
+   # action[0:3] = PV allocation logits [house, batt, grid]
+   pv_fracs = softmax(action[0:3])
+   pv_to_house_frac = pv_fracs[0]
+   pv_to_batt_frac = pv_fracs[1]
+   pv_to_grid_frac = pv_fracs[2]  # Explicit control over selling!
+   ```
+
+3. **Higher Gamma** (from Fix #1)
+   ```python
+   gamma=0.999  # Already set in train_1.py
+   ```
+
+4. **NEW: Moderate Reward Shaping**
+   ```python
+   base_reward = -(energy_bought * buy_price - energy_sold * sell_price + degradation)
+
+   # Shaping #1: Opportunity cost penalty (makes selling's true cost immediate)
+   opportunity_cost = energy_sold * (buy_price - sell_price)
+
+   # Shaping #2: SOC management (encourage 40-70% SOC for readiness)
+   soc_penalty = 0.02 * max(0, 0.4 - soc_ratio) + 0.01 * max(0, soc_ratio - 0.7)
+
+   # Final reward with moderate weights
+   reward = base_reward - 0.5 * opportunity_cost - soc_penalty
+   ```
+
+### Why This Should Work
+
+**Problem**: Even with correct normalization (Fix #1) and explicit action space (Fix #2), the agent faces a sparse reward problem:
+- Selling gives immediate +€0.04/kWh reward (easy to learn)
+- Storing gives -€0.001 now + €0.19 in 8 hours (hard to learn)
+- Agent converged to "selling is safe" local minimum
+
+**Solution**: Reward shaping makes the true cost of selling immediately apparent WITHOUT changing the optimal policy:
+- Opportunity cost penalty: Selling 1 kWh at €0.04 when buy=€0.19 → immediate -€0.075 penalty
+- SOC incentive: Keeps battery ready for peak hours without forcing specific timing
+- Weights are conservative (0.5) to not override natural rewards
+
+**Expected Results**:
+- Target: €450-480/year (18-24% improvement over original €591)
+- Lower selling: <50% of PV (vs 72% in Fix #1)
+- Higher battery use: 15-30% avg SOC (vs 9% in Fix #1)
+- Fewer grid purchases: <3,000 kWh (vs 3,586 kWh in Fix #1)
+
+### Training Status
+- **Status**: Ready to train
+- **Timesteps**: 200,000
+- **Expected duration**: ~20 minutes
 
 ---
 
